@@ -1,0 +1,50 @@
+version: "3.8"
+services:
+  clickhouse:
+    image: yandex/clickhouse-server:latest
+    ports:
+      - "9000:9000"
+      - "8123:8123"
+  kafka:
+    image: bitnami/kafka:latest
+    environment:
+      - KAFKA_BROKER_ID=1
+      - KAFKA_ZOOKEEPER_CONNECT=zookeeper:2181
+    ports:
+      - "9092:9092"
+    depends_on:
+      - zookeeper
+  zookeeper:
+    image: bitnami/zookeeper:latest
+    ports:
+      - "2181:2181"
+  redis:
+    image: redis:7
+    ports:
+      - "6379:6379"
+  backend_go:
+    build: ./backend_go
+    depends_on:
+      - clickhouse
+      - kafka
+      - redis
+    ports:
+      - "8080:8080"
+  python-seeder:
+    build: ./backend_python
+    command: ["python", "seed.py", "1000000000"]
+    depends_on:
+      - clickhouse
+    ports: []
+  analytics:
+    build: ./backend_python/analytics
+    ports:
+      - "8081:8080"
+    depends_on:
+      - clickhouse
+  frontend:
+    build: ./frontend
+    ports:
+      - "3000:3000"
+    depends_on:
+      - backend_go
