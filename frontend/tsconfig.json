@@ -1,0 +1,8 @@
+{
+  "extends": "./.svelte-kit/tsconfig.json",
+  "compilerOptions": {
+    // you can add any overrides here, for example:
+    "strict": true
+  },
+  "include": ["src/**/*", "svelte.config.js", "vite.config.ts"]
+}

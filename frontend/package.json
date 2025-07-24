@@ -1,0 +1,28 @@
+{
+	"name": "frontend",
+	"private": true,
+	"version": "0.0.1",
+	"type": "module",
+	"scripts": {
+		"dev": "vite dev",
+		"build": "vite build",
+		"preview": "vite preview",
+		"prepare": "svelte-kit sync || echo ''"
+	},
+	"devDependencies": {
+		"@sveltejs/adapter-auto": "^6.0.0",
+		"@sveltejs/kit": "^2.22.0",
+		"@sveltejs/vite-plugin-svelte": "^6.0.0",
+		"svelte": "^5.0.0",
+		"svelte-check": "^4.3.0",
+		"svelte-preprocess": "^6.0.3",
+		"typescript": "^5.8.3",
+		"vite": "^7.0.4"
+	},
+	"dependencies": {
+		"@tanstack/svelte-virtual": "^3.13.12",
+		"chart.js": "^4.5.0",
+		"chartjs-adapter-date-fns": "^3.0.0",
+		"date-fns": "^4.1.0"
+	}
+}
