@@ -95,6 +95,7 @@ pip install --upgrade pip
 pip install faker clickhouse-driver
 #python seed.py "$ROWS"
 deactivate
+cd ..
 
 curl -fsSL https://deb.nodesource.com/setup_22.x | sudo -E bash -
 sudo apt-get install -y nodejs
