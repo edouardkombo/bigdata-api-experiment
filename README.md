@@ -146,13 +146,22 @@ Summary of high-performance analytics:
 
 To streamline setup on a fresh Linux machine, we've provided a `setup.sh` script that installs prerequisites, configures services, seeds data, and starts all components.
 
-### 1. Make `setup.sh` executable
+### 1. Copy `env.example` 
+
+```bash
+cp env.example .env
+cd frontend & cp env.example .env
+```
+
+Then update content according to your needs.
+
+### 2. Make `setup.sh` executable
 
 ```bash
 chmod +x setup.sh
 ```
 
-### 2. Run the setup script
+### 3. Run the setup script
 
 ```bash
 sudo ./setup.sh
@@ -160,8 +169,8 @@ sudo ./setup.sh
 
 This will perform the following steps:
 
-1. **Install system packages**: ClickHouse, Kafka & Zookeeper, Redis, Go, Node.js, Python3, pip
-2. **Start services**: ClickHouse server, Zookeeper, Kafka broker, Redis server
+1. **Install system packages**: ClickHouse, Kafka, Redis, Go, Node.js, Python3, pip
+2. **Start services**: ClickHouse server, Kafka broker, Redis server
 3. **Initialize database**: create `page_events` table in ClickHouse
 4. **Build and launch Go services**: seeder, ingest, api-gateway
 5. **Seed data**: launch Go seeder to insert 1 billion rows (configurable in `setup.sh`)
