@@ -131,6 +131,7 @@ Summary of high-performance analytics:
 
 *Python remains in isolated slices only, ensuring the core data path is Go.*
 
+**I decided to use Python as a seeder, only to show the difference of speed between Python & Go**
 ---
 
 ## 📁 File Organization & Single-Responsibility Principles
