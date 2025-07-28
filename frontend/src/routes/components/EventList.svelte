@@ -40,7 +40,7 @@
 </style>
 
 <div class="list">
-  {#each events as ev (ev.id)}
+  {#each events as ev, i (`${ev.id}-${i}`)}
     <div class="row">
       <div class="text-xs text-gray-500">{ev.ts}</div>
       <div class="mt-1 text-sm">

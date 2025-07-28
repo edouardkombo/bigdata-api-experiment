@@ -1,187 +1,180 @@
 # BigData Analytics Dashboard
 
-## 📝 Overview
+## 📖 Overview
 
 This repository implements a **billion-row** event-log analytics dashboard with a uniform Go core for maximum throughput, plus a minimal Python slice to showcase data-science capabilities. Storage is handled by ClickHouse for true OLAP performance, while the front-end uses SvelteKit for a lightweight, reactive UI.
 
 Summary of high-performance analytics:
-- **Go** for backend data ingestion, transformation, and API services  
-- **ClickHouse** as the analytics database (capable of handling billions of rows)  
-- **Kafka** as a high-throughput, durable ingestion buffer  
-- **Redis** as a low-latency cache for hot lookups and rate limiting  
-- **SvelteKit** + **Chart.js** for a reactive, lightweight frontend  
-- **Virtualized or paginated** event lists for efficient browsing  
+
+- **Go** for backend data ingestion, transformation, and API services
+- **ClickHouse** as the analytics database (capable of handling billions of rows)
+- **RabbitMQ** as the ingestion buffer (replacing Kafka)
+- **SvelteKit** + **Chart.js** for a reactive, lightweight frontend
+- **Virtualized or paginated** event lists for efficient browsing
 
 ---
 
 ## Why This Is Faster Than Most Solutions
 
-1. **Compiled Go Services**  
-   - **Native binaries** with zero interpreter overhead.  
-   - **Static typing** and inlined calls reduce per-record CPU cost.  
+1. **Compiled Go Services**
+
+   - **Native binaries** with zero interpreter overhead.
+   - **Static typing** and inlined calls reduce per-record CPU cost.
    - **Goroutines & channels** provide efficient, zero-copy concurrency for parallel seeding and ingestion.
 
-2. **ClickHouse for Analytics**  
-   - Columnar storage and vectorized execution dramatically speed up aggregations and time-series queries.  
-   - Designed for **massive scale**—can hold 1 billion+ rows with sub-second OLAP queries.  
+2. **ClickHouse for Analytics**
+
+   - Columnar storage and vectorized execution dramatically speed up aggregations and time-series queries.
+   - Designed for **massive scale** — can hold 1 billion+ rows with sub-second OLAP queries.
    - MergeTree engine provides fast inserts and near-real-time reads.
 
-3. **Kafka Ingestion Pipeline**  
-   - Decouples data generation (seeder) from storage (ingest), smoothing spikes and providing durability.  
-   - **Partitioned topics** let you scale consumers across multiple machines.  
-   - **At-least-once delivery** ensures no data loss under failures.
+3. **RabbitMQ Ingestion Pipeline**
 
-4. **Redis Caching**  
-   - Hot data (e.g. most recent minute’s event counts) is cached for microsecond reads.  
-   - Eases load on ClickHouse for repeated dashboard refreshes.
+   - Decouples data generation (seeder) from storage (ingest), smoothing spikes and providing durability.
+   - Queued ingestion allows replay, burst handling, and safer failure recovery.
+   - Simplified routing using one durable queue (`events`).
 
-5. **Frontend Efficiency**  
-   - **SvelteKit** compiles to minimal vanilla JS; no virtual DOM.  
-   - **Dynamic imports** of Chart.js and adapters, so initial bundle stays small.  
+4. **Frontend Efficiency**
+
+   - **SvelteKit** compiles to minimal vanilla JS; no virtual DOM.
+   - **Dynamic imports** of Chart.js and adapters, so initial bundle stays small.
    - **Progressive skeleton loaders** keep users engaged while data streams in.
 
 ---
 
 ## Architecture & Data Flow
 
-1. **Seeding**  
-   - `seeder` (Go binary) generates synthetic `page_event` records (UUIDs, URLs, timestamps, metadata).  
-   - Emits records into **Kafka** topic `page_events`.
+1. **Seeding**
 
-2. **Ingestion**  
-   - `ingest` (Go binary) consumes `page_events` from Kafka in batches.  
-   - Writes batches into ClickHouse `analytics.page_events` table via the ClickHouse Go client.
+   - `seeder` (Go or Python) generates synthetic `page_event` records.
+   - Emits records to **RabbitMQ** queue `events`.
 
-3. **API Gateway**  
-   - Built with **Chi router** in Go; listens on `:8080`.  
-   - **Endpoints** (all `GET`):
-     - `/metrics/overview`  
-       Returns JSON `{ total_events, unique_users, events_last_hour }` by running three sub-queries in one ClickHouse request.
-     - `/metrics/time-series?from=…&to=…&interval=…`  
-       Streams back an array of `{ bucket: DateTime, count: UInt64 }` using `GROUP BY toStartOfInterval(...)`.
-     - `/metrics/type-breakdown`  
-       Returns a map `{ event_type: count }` via `GROUP BY event_type`.
-     - `/metrics/events?cursor=…&limit=…`  
-       Paginates raw events, filtering `ts > cursor`, ordered by `ts`, limit N.
+2. **Ingestion**
 
-   - **Streaming vs. Batch**  
-     - Overview & breakdown endpoints return full JSON arrays (suitable for charting).  
-     - Event pagination is **stateless paging** (cursor-based), not long-lived HTTP streams.
+   - `consumer` (Go) listens to RabbitMQ and writes batches into ClickHouse `analytics.page_events`.
 
-4. **Caching & Rate-Limit**  
-   - **Redis** can be optionally introduced in the API layer to cache heavy queries (e.g. same time-series window) for sub-millisecond fetch.  
-   - Also used for **rate-limiting** frontend polling (e.g. `X requests per second`).
+3. **API Gateway**
 
-5. **Frontend**  
-   - **Environment**: reads `VITE_API_BASE` from `.env` to know where to call the API.  
-   - **Data fetching** via SvelteKit `load` + client-side `fetch()`.  
-   - **Skeleton loaders** during `loading` state, then dynamic import of Chart.js for charts.  
-   - **Pagination** “Load more” button or optional virtualized list for event log.  
+   - Built with **Chi router** in Go; listens on `:8080`.
+   - **Endpoints**:
+     - `/metrics/overview` → Total, unique users, first/last timestamps
+     - `/metrics/time-series?from=...&to=...&interval=...` → Aggregated event counts per time bucket
+     - `/metrics/type-breakdown` → Counts per `event_type`
+     - `/metrics/events?user_id=...&event_type=...` → Filtered recent event rows
+
+4. **Frontend**
+
+   - Reads `VITE_API_BASE` from `.env`
+   - Uses SvelteKit + `Chart.js` + dynamic imports
+   - Built-in loaders and modular chart components
 
 ---
 
-
-## 🔧 Technical Choices
+## 🛠️ Technical Choices
 
 - **Storage Layer: ClickHouse**\
-  Columnar MergeTree engine, built for >10⁹ rows with vectorized execution, compression, TTL, and sharding.
+  MergeTree engine with vectorized execution and built-in TTL, partitions, and compression.
 
-- **Ingestion & Seeding: Go**
+- **Ingestion & Seeding: Go**\
+  High-throughput seeding tools and durable RabbitMQ pipelines.
 
-  - **High-throughput CSV seeder**: Go CLI using `gofakeit` to generate CSV shards and bulk-load via `clickhouse-client` (>200 k rows/sec).
-  - **Real-time ingest**: Go gRPC server (grpc-go) publishing to Kafka.
+- **Queue Layer: RabbitMQ**\
+  Simpler, pluggable, and easier to manage than Kafka for this scale.
 
-- **Streaming Buffer: Kafka → ClickHouse**\
-  Kafka for durable, replayable back-pressure; ClickHouse’s Kafka engine ingests directly.
+- **Frontend: SvelteKit**\
+  Ultra-light reactivity and dynamic chart rendering.
 
-- **Materialized Aggregates & Caching**
-
-  - ClickHouse Materialized Views for continuous minute/hour buckets.
-  - Redis Cluster caches summary keys (TTL \~30 s).
-
-- **Backend Query Layer: Go**
-
-  - `GET /metrics/overview` → Redis or continuous-aggregate tables (p95 < 5 ms).
-  - `GET /events` → cursor-based JSON-Lines streaming (p95 < 50 ms for \~1 k rows).\
-    Uses the official [clickhouse-go] client for native TCP performance.
-
-- **Frontend: SvelteKit**
-
-  - Zero-overhead RPC: fetch+Zod or lightweight tRPC proxy.
-  - `svelte-virtual` for windowed lists, lazy-loaded chart components.
-
-- **Python Slice**
-
-  - **Seeder**: small `seed.py` with Faker+asyncpg to highlight Python skills.
+- **Python Slice**\
+  Included only for seeding speed comparison and async data simulations.
 
 ---
 
-## 🚫 Why Not PostgreSQL?
+## 🧾 File Organization
 
-1. **Scale & Performance**: At ≈10⁹ rows, Postgres vacuum churn and partition maintenance hinder p95.
-2. **OLAP Focus**: ClickHouse’s columnar storage and vectorized queries vastly outperform Postgres for analytics.
-3. **Operational Simplicity**: ClickHouse automates compression and chunking—no manual partitioning.
-
----
-
-## 🚫 Why Not Python (Core)?
-
-1. **GIL & Pauses**: Python’s interpreter lock and GC can introduce unpredictable tail latency under heavy load.
-2. **Throughput**: Go offers consistent multi-core performance and minimal startup overhead.
-
-*Python remains in isolated slices only, ensuring the core data path is Go.*
-
-**I decided to use Python as a seeder, only to show the difference of speed between Python & Go**
----
-
-## 📁 File Organization & Single-Responsibility Principles
-
-- **One file = One role**: each file holds a single public function or component.
-- **Keep files small**: target <200 lines; split when exceeding \~100 lines.
-- **Minimal imports**: avoid coupling; if a file imports 3+ modules, consider splitting it.
-- **Test per file**: one test file per package or component.
+- `backend_go/cmd/producer` → HTTP API → RabbitMQ
+- `backend_go/cmd/grpcserver` → gRPC API → RabbitMQ
+- `backend_go/cmd/consumer` → RabbitMQ → ClickHouse
+- `backend_go/clickhouse/init.sql` → Schema
+- `backend_go/proto/event.proto` → Protobuf definitions
+- `backend_python` → Python Seeder
+- `frontend` → Svelte frontend
 
 ---
 
-## 🏁 Getting Started (Linux All-in-One)
+## 🧪 Getting Started (Linux All-in-One)
 
-To streamline setup on a fresh Linux machine, we've provided a `setup.sh` script that installs prerequisites, configures services, seeds data, and starts all components.
-
-### 1. Copy `env.example` 
+### 1. Copy `.env` files
 
 ```bash
 cp env.example .env
-cd frontend & cp env.example .env
+cd frontend && cp env.example .env
 ```
-
-Then update content according to your needs.
 
 ### 2. Make `setup.sh` executable
 
 ```bash
-chmod +x setup.sh
+chmod +x install_packages.sh
 ```
 
-### 3. Run the setup script
+### 3. Run the setup
 
 ```bash
-sudo ./setup.sh
+sudo ./setup.sh 100000
 ```
 
-This will perform the following steps:
+This will:
 
-1. **Install system packages**: ClickHouse, Kafka, Redis, Go, Node.js, Python3, pip
-2. **Start services**: ClickHouse server, Kafka broker, Redis server
-3. **Initialize database**: create `page_events` table in ClickHouse
-4. **Build and launch Go services**: seeder, ingest, api-gateway
-5. **Seed data**: launch Go seeder to insert 1 billion rows (configurable in `setup.sh`)
-6. **Setup Python venv**
-7. **Build and serve frontend**: install dependencies, build SvelteKit, and start dev server on port 5173
+- Install RabbitMQ, ClickHouse, Go, Python, and frontend deps
+- Initialize the DB schema
+- Launch all services
+- Seed data using Go or Python
+- Serve dashboard on [http://localhost:5173](http://localhost:5173)
 
-Once complete, access:
+---
 
-- **Dashboard:** [http://localhost:5173](http://localhost:5173)
-- **Backend API:** [http://localhost:8080](http://localhost:8080)
+## 🔪 Test It
+
+### HTTP
+
+```http
+POST http://localhost:8080/events
+Content-Type: application/json
+
+{
+  "user_id": "abc-123",
+  "event_type": "click",
+  "url": "https://example.com/page",
+  "referrer": "https://google.com"
+}
+```
+
+### gRPC
+
+Call `PublishEvent` on port `50051` using `grpcurl`, Postman, or a generated client.
+
+---
+
+## 📊 Architecture Flow
+
+```
+HTTP / gRPC Producer
+        │
+        ▼
+    RabbitMQ (queue: events)
+        │
+        ▼
+  Consumer (Go)
+        │
+        ▼
+ ClickHouse (table: analytics.page_events)
+```
+
+## 🛋️ Optional Cleanup
+
+```bash
+sudo lsof -ti:8080 | xargs sudo kill -9
+sudo lsof -ti:50051 | xargs sudo kill -9
+```
 
 
 

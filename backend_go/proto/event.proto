@@ -1,0 +1,25 @@
+
+syntax = "proto3";
+
+package ingest;
+
+option go_package = "bigdata-perf/proto;ingestpb";
+
+message EventRequest {
+  string id = 1;
+  string user_id = 2;
+  string event_type = 3;
+  string url = 4;
+  string referrer = 5;
+  string ts = 6;
+  map<string,string> meta = 7;
+}
+
+message EventResponse {
+  string status = 1;
+  string id = 2;
+}
+
+service EventService {
+  rpc PublishEvent(EventRequest) returns (EventResponse);
+}

@@ -1,8 +1,14 @@
 <script lang="ts">
   import WithSkeleton from '$lib/WithSkeleton.svelte';
-  export let total_events: number|null = null;
+  export let total: number|null = null;
   export let unique_users: number|null = null;
-  export let events_last_hour: number|null = null;
+  export let last_hour: number|null = null;
+
+  // Normalize last_hour to a count (length if array)
+  $: last_hour_count = Array.isArray(last_hour)
+    ? last_hour.length
+    : (typeof last_hour === 'number' ? last_hour : 0);
+
 </script>
 
 <style>
@@ -14,9 +20,9 @@
 
 <div class="grid">
   {#each [
-    { label: 'Total Events',       value: total_events },
+    { label: 'Total Events',       value: total },
     { label: 'Unique Users',       value: unique_users },
-    { label: 'Events Last Hour',   value: events_last_hour }
+    { label: 'Events Last Hour',   value: last_hour_count }
   ] as card}
     <div class="card">
       <div class="title">{card.label}</div>

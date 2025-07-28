@@ -4,7 +4,7 @@
   import TypeBreakdownChart from './components/TypeBreakdownChart.svelte';
   import EventList          from './components/EventList.svelte';
   export let data: {
-    overview: { total_events: number; unique_users: number; events_last_hour: number };
+    overview: { total: number; unique_users: number; last_hour: number };
     events: any[];
     cursor: string|null;
   };
@@ -12,9 +12,9 @@
 
 <div class="container py-4">
   <SummaryGrid
-    total_events={data.overview.total_events}
+    total={data.overview.total}
     unique_users={data.overview.unique_users}
-    events_last_hour={data.overview.events_last_hour}
+    last_hour={data.overview.last_hour}
   />
 
   <div class="row mb-4">

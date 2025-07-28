@@ -1,117 +1,133 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Variables (override by exporting before running)
-ROWS=${ROWS:-1000000000}
-BATCH=${BATCH:-10000}
-
-# 1. Purge stale ClickHouse APT entries
-rm -f /etc/apt/sources.list.d/*clickhouse*.list
-sed -i '/repo.clickhouse\.com/d;/packages\.clickhouse\.com\/deb/d' /etc/apt/sources.list || true
-
-# 2. Install system prerequisites
-apt-get update
-DEPS=(curl gnupg lsb-release tmux git software-properties-common \
-      apt-transport-https ca-certificates dirmngr python3 python3-venv)
-apt-get install -y "${DEPS[@]}"
-
-# 3. Install Go
-if ! command -v go &>/dev/null; then
-  add-apt-repository -y ppa:longsleep/golang-backports
-  apt-get update
-  apt-get install -y golang-go
+if pidof setup.sh >/dev/null; then
+  echo "Script is already running"
+  exit 1
 fi
 
-# 4. Install Node.js
-if ! command -v node &>/dev/null; then
-  curl -fsSL https://deb.nodesource.com/setup_18.x | bash -
-  apt-get install -y nodejs npm
+
+if [ -z "$1" ]; then
+  echo "[ERROR] Missing argument: number of rows to mock"
+  echo "Usage: ./setup.sh <number_of_rows>"
+  exit 1
 fi
 
-# 5. Add & install ClickHouse
-echo "deb [trusted=yes] https://packages.clickhouse.com/deb stable main" \
-  | tee /etc/apt/sources.list.d/clickhouse.list
-apt-get update
-apt-get install -y clickhouse-server clickhouse-client
+ROWS=$1
 
-# 6. Reset default ClickHouse password if set
-if [ -f /etc/clickhouse-server/users.d/default-password.xml ]; then
-  systemctl stop clickhouse-server
-  rm -f /etc/clickhouse-server/users.d/default-password.xml
-  systemctl start clickhouse-server
-else
-  service clickhouse-server start
-fi
+# Ensure script is run from the project root
+set -e
 
-# 7. Kafka & Zookeeper (Confluent OSS)
-rm -f /etc/apt/sources.list.d/confluent*.list
-echo "deb [trusted=yes] https://packages.confluent.io/deb/7.5 stable main" \
-  | tee /etc/apt/sources.list.d/confluent.list
-apt-get update
-apt-get install -y confluent-community-2.13
-nohup zookeeper-server-start /etc/kafka/zookeeper.properties > /tmp/zk.log 2>&1 &
-nohup kafka-server-start     /etc/kafka/server.properties      > /tmp/kafka.log   2>&1 &
+INITIAL_ROWS=100000
 
-# 8. Install Redis
-if ! command -v redis-server &>/dev/null; then
-  apt-get install -y redis-server
-fi
-nohup redis-server --daemonize yes
+echo "==> Seeding $INITIAL_ROWS entries using Go + RabbitMq first..."
 
-# 9. Initialize ClickHouse schema
-clickhouse-client --query="CREATE DATABASE IF NOT EXISTS analytics;"
-clickhouse-client --query="
-CREATE TABLE IF NOT EXISTS analytics.page_events (
-    id String,
-    user_id String,
-    event_type String,
-    url String,
-    referrer String,
-    ts DateTime,
-    meta String
-) ENGINE = MergeTree() ORDER BY ts;
-"
-
-# 10. Build & launch Go services
+# Step 1: Seed with Go
 cd backend_go
-go mod init project || true
-go mod tidy
-go get github.com/go-chi/chi/v5
-go get github.com/go-chi/cors
-go build -o seeder     ./cmd/seeder
-go build -o ingest     ./cmd/ingest
-go build -o api-gateway ./cmd/api-gateway
-nohup ./seeder       --rows "$ROWS" --batch "$BATCH" > /tmp/seeder.log     2>&1 &
-nohup ./ingest                          > /tmp/ingest.log     2>&1 &
-nohup ./api-gateway                     > /tmp/api-gateway.log 2>&1 &
+
+PIDS=$(sudo lsof -t -i :50051 || true)
+if [ -n "$PIDS" ]; then
+  echo "🔪 Killing process on port 50051: $PIDS"
+  sudo kill -9 $PIDS
+else
+  echo "✅ No process running on port 50051"
+fi
+PIDS=$(sudo lsof -t -i :8080 || true)
+if [ -n "$PIDS" ]; then
+  echo "🔪 Killing process on port 8080: $PIDS"
+  sudo kill -9 $PIDS
+else
+  echo "✅ No process running on port 8080"
+fi
+
+PIDS=$(sudo lsof -t -i :8088 || true)
+if [ -n "$PIDS" ]; then
+  echo "🔪 Killing process on port 8088: $PIDS"
+  sudo kill -9 $PIDS
+else
+  echo "✅ No process running on port 8088"
+fi
+
+nohup go run cmd/consumer/main.go > logs/consumer.log 2>&1 &
+nohup go run cmd/api/main.go > logs/api.log 2>&1 &
+start_go=$(date +%s%3N)
+go run main.go --only-seed --seed-count=$INITIAL_ROWS > ./logs/main.log
 cd ..
 
-# 11. Python seed in virtualenvs (ONLY TO TEST THE TIME SPEED DIFFERENCE AGAINST GO)
-# 11a. Seeder: clickhouse-driver based
+end_go=$(date +%s%3N)
+go_time=$((end_go - start_go))
+
+echo "==> Go seeding completed in $go_time ms"
+
+echo ""
+echo "==> Seeding $INITIAL_ROWS entries using Python now..."
+start_py=$(date +%s%3N)
+
+# Step 2: Seed with Python
 cd backend_python
 python3 -m venv venv
 source venv/bin/activate
-pip install --upgrade pip
-pip install faker clickhouse-driver
-#python seed.py "$ROWS"
+pip install --upgrade pip >/dev/null
+pip install faker clickhouse-driver >/dev/null
+python seed.py "$INITIAL_ROWS"
 deactivate
 cd ..
 
-curl -fsSL https://deb.nodesource.com/setup_22.x | sudo -E bash -
-sudo apt-get install -y nodejs
+end_py=$(date +%s%3N)
+py_time=$((end_py - start_py))
 
-# 12. Install & run SvelteKit frontend
+echo "==> Python seeding completed in $py_time ms"
+echo ""
+
+# Step 3: Frontend
+echo "==> Setting up frontend before"
+
+PIDS=$(sudo lsof -t -i :5173 || true)
+if [ -n "$PIDS" ]; then
+  echo "🔪 Killing process on port 5173: $PIDS"
+  sudo kill -9 $PIDS
+else
+  echo "✅ No process running on port 5173"
+fi
+
 cd frontend
+mkdir -p logs
 rm -rf node_modules package-lock.json
-sudo apt autoremove
-npm install --save-dev svelte-preprocess
-npm install --save-dev typescript --legacy-peer-deps
-npm install --save-dev svelte-check --legacy-peer-deps
-npm install chart.js --legacy-peer-deps
-npm install chartjs-adapter-date-fns date-fns --legacy-peer-deps
-npm install @tanstack/svelte-virtual@3.13.12 --legacy-peer-deps
-npm install --legacy-peer-deps
-nohup npm run dev --host > /tmp/frontend.log 2>&1 &
+# Dev-only tools
+npm install --save-dev --legacy-peer-deps svelte-preprocess typescript svelte-check dotenv
+# Runtime libraries
+npm install --legacy-peer-deps chart.js chartjs-adapter-date-fns date-fns
+nohup npm run dev --host > ./logs/frontend.log 2>&1 &
+echo "✅ Setup complete! Dashboard live at http://localhost:5173"
+cd ../
 
-echo "✅ Setup complete! Dashboard live at http://localhost:3000"
+# Step 4: Summary
+echo "====== Seeding Time Summary ======"
+echo "Go     : $go_time ms"
+echo "Python : $py_time ms"
+echo "=================================="
+echo ""
+
+# Step 5: Ask user
+read -p "Which language do you want to use for seeding big data rows? (go/python): " choice
+
+# Step 6: Background seeding
+if [ "$choice" = "go" ]; then
+  echo "==> Running full Go seed..."
+  cd backend_go
+  nohup go run main.go --only-seed --seed-count=$ROWS > ./logs/main.log &
+  cd ..
+elif [ "$choice" = "python" ]; then
+  echo "==> Running full Python seed..."
+  cd backend_python
+  source venv/bin/activate || source venv/bin/activate
+  nohup python seed.py $ROWS &
+  deactivate
+  cd ..
+else
+  echo "Invalid choice. No seeding performed."
+fi
+
+echo "🌱 Seeding in background with '$choice' for $ROWS rows... check logs in ./backend_$choice/logs/"
+
 
