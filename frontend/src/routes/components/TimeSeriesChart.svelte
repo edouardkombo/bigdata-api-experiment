@@ -19,18 +19,69 @@
       loading = false;
       await tick();
 
-      // Now canvas is in the DOM
+      // Import Chart.js only when canvas is ready
       const { default: Chart } = await import('chart.js/auto');
+
+      // Preprocess once to avoid double map
+      const labels = new Array(data.length);
+      const counts = new Array(data.length);
+      for (let i = 0; i < data.length; i++) {
+        labels[i] = data[i].bucket;
+        counts[i] = data[i].count;
+      }
+
       new Chart(canvas.getContext('2d'), {
         type: 'line',
         data: {
-          labels: data.map(d => d.bucket),
-          datasets: [{ label: 'Events', data: data.map(d => d.count), fill: true }]
+          labels,
+          datasets: [{
+            label: 'Events',
+            data: counts,
+            fill: true,
+            tension: 0.3, // optional smoothing
+            pointRadius: 0, // hides points for performance
+            borderWidth: 1,
+          }]
         },
         options: {
-          scales: { x: { type: 'time', time: { unit: 'hour' } } }
+          responsive: true,
+          animation: false,
+          plugins: {
+            legend: { display: false },
+            tooltip: { mode: 'index', intersect: false }
+          },
+          scales: {
+            x: {
+              type: 'time',
+              time: {
+                unit: 'hour',
+                tooltipFormat: 'HH:mm',
+              },
+              ticks: {
+                autoSkip: true,
+                maxTicksLimit: 12
+              }
+            },
+            y: {
+              beginAtZero: true
+            }
+          },
+          interaction: {
+            mode: 'nearest',
+            axis: 'x',
+            intersect: false
+          },
+          elements: {
+            line: {
+              borderColor: 'rgba(75, 192, 192, 1)'
+            },
+            point: {
+              backgroundColor: 'rgba(75, 192, 192, 1)'
+            }
+          }
         }
       });
+
     } catch (e) {
       console.error('TimeSeriesChart error:', e);
       loading = false;

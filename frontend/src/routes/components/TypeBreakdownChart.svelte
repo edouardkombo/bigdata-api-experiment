@@ -9,17 +9,46 @@
 
   onMount(async () => {
     try {
-      const data = await fetchTypeBreakdown(fetch);
-
+      const raw = await fetchTypeBreakdown(fetch);
       loading = false;
       await tick();
+
+      const entries = Object.entries(raw)
+        .map(([type, count]) => [type, +count])
+        .sort((a, b) => b[1] - a[1]); // sort descending
+
+      const maxSlices = 6;
+      const top = entries.slice(0, maxSlices);
+      const rest = entries.slice(maxSlices);
+
+      if (rest.length > 0) {
+        const otherSum = rest.reduce((sum, [, c]) => sum + c, 0);
+        top.push(['Other', otherSum]);
+      }
+
+      const labels = top.map(([t]) => t);
+      const values = top.map(([, c]) => c);
 
       const { default: Chart } = await import('chart.js/auto');
       new Chart(canvas.getContext('2d'), {
         type: 'pie',
         data: {
-          labels: Object.keys(data),
-          datasets: [{ label: 'Count', data: Object.values(data) }]
+          labels,
+          datasets: [{
+            label: 'Event Type',
+            data: values,
+            borderWidth: 1
+          }]
+        },
+        options: {
+          responsive: true,
+          animation: false,
+          plugins: {
+            legend: { position: 'top' },
+            tooltip: { callbacks: {
+              label: (ctx) => `${ctx.label}: ${ctx.formattedValue}`
+            }}
+          }
         }
       });
     } catch (e) {
