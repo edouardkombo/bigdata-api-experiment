@@ -14,6 +14,15 @@ import (
 
 var dsn = "tcp://127.0.0.1:9000?debug=false"
 
+func setSessionLimits(db *sql.DB) {
+	db.Exec(`
+		SET max_memory_usage = 6000000000,
+		    max_bytes_before_external_group_by = 100000000,
+		    max_bytes_before_external_sort = 100000000,
+		    max_threads = 4
+	`)
+}
+
 func OverviewHandler(w http.ResponseWriter, r *http.Request) {
 	db, err := sql.Open("clickhouse", dsn)
 	if err != nil {
@@ -21,8 +30,15 @@ func OverviewHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer db.Close()
+	setSessionLimits(db)
 
-	row := db.QueryRow(`SELECT count(*) AS total, count(DISTINCT user_id) AS unique_users, min(ts), max(ts) FROM analytics.page_events`)
+	row := db.QueryRow(`
+		SELECT count() AS total,
+		       uniq(user_id) AS unique_users,
+		       min(ts),
+		       max(ts)
+		FROM analytics.page_events
+	`)
 	var total int
 	var users int
 	var minTS, maxTS string
@@ -31,8 +47,13 @@ func OverviewHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Fetch events from the last hour
-	rows, err := db.Query(`SELECT id, user_id, event_type, url, referrer, ts, meta FROM analytics.page_events WHERE ts > now() - INTERVAL 1 HOUR ORDER BY ts DESC`)
+	rows, err := db.Query(`
+		SELECT id, user_id, event_type, url, referrer, ts, meta
+		FROM analytics.page_events
+		WHERE ts > now() - INTERVAL 1 HOUR
+		ORDER BY ts DESC
+		LIMIT 5000
+	`)
 	if err != nil {
 		http.Error(w, "Query error", 500)
 		return
@@ -47,7 +68,7 @@ func OverviewHandler(w http.ResponseWriter, r *http.Request) {
 		}
 		var metaMap map[string]string
 		if err := json.Unmarshal([]byte(meta), &metaMap); err != nil {
-			log.Printf("⚠️ Failed to decode meta for ID %s: %v", id, err)
+			log.Printf("\u26a0\ufe0f Failed to decode meta for ID %s: %v", id, err)
 			metaMap = map[string]string{"raw": meta}
 		}
 
@@ -63,9 +84,7 @@ func OverviewHandler(w http.ResponseWriter, r *http.Request) {
 		recent = append(recent, e)
 	}
 
-	log.Printf("📊 Events in last hour: %d", len(recent))
 	w.Header().Set("Cache-Control", "no-store")
-
 	json.NewEncoder(w).Encode(map[string]any{
 		"total":        total,
 		"unique_users": users,
@@ -75,7 +94,6 @@ func OverviewHandler(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-
 func EventsHandler(w http.ResponseWriter, r *http.Request) {
 	db, err := sql.Open("clickhouse", dsn)
 	if err != nil {
@@ -83,6 +101,7 @@ func EventsHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer db.Close()
+	setSessionLimits(db)
 
 	limit := 100
 	if l := r.URL.Query().Get("limit"); l != "" {
@@ -92,7 +111,6 @@ func EventsHandler(w http.ResponseWriter, r *http.Request) {
 	userID := r.URL.Query().Get("user_id")
 	eventType := r.URL.Query().Get("event_type")
 
-	// Build WHERE clause dynamically
 	whereClauses := []string{}
 	args := []any{}
 
@@ -127,7 +145,6 @@ func EventsHandler(w http.ResponseWriter, r *http.Request) {
 		}
 		var metaMap map[string]string
 		json.Unmarshal([]byte(meta), &metaMap)
-
 		e := map[string]any{
 			"id":         id,
 			"user_id":    userID,
@@ -149,6 +166,7 @@ func TimeSeriesHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer db.Close()
+	setSessionLimits(db)
 
 	from := r.URL.Query().Get("from")
 	to := r.URL.Query().Get("to")
@@ -158,7 +176,6 @@ func TimeSeriesHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Protect against injection by validating interval
 	allowedIntervals := map[string]bool{
 		"1 minute": true,
 		"5 minute": true,
@@ -171,16 +188,13 @@ func TimeSeriesHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Construct the safe SQL
 	query := fmt.Sprintf(`
-		SELECT
-			toStartOfInterval(ts, INTERVAL %s) AS bucket,
-			count(*) as count
+		SELECT toStartOfInterval(ts, INTERVAL %s) AS bucket, count() as count
 		FROM analytics.page_events
 		WHERE ts BETWEEN parseDateTimeBestEffort(?) AND parseDateTimeBestEffort(?)
 		GROUP BY bucket
 		ORDER BY bucket ASC
-	`, interval)
+		LIMIT 1000`, interval)
 
 	rows, err := db.Query(query, from, to)
 	if err != nil {
@@ -213,8 +227,14 @@ func TypeBreakdownHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer db.Close()
+	setSessionLimits(db)
 
-	rows, err := db.Query(`SELECT event_type, count(*) FROM analytics.page_events GROUP BY event_type ORDER BY count(*) DESC`)
+	rows, err := db.Query(`
+		SELECT event_type, count() as c
+		FROM analytics.page_events
+		GROUP BY event_type
+		ORDER BY c DESC
+		LIMIT 100`)
 	if err != nil {
 		http.Error(w, "Query error", 500)
 		return
