@@ -52,7 +52,7 @@ func OverviewHandler(w http.ResponseWriter, r *http.Request) {
 		FROM analytics.page_events
 		WHERE ts > now() - INTERVAL 1 HOUR
 		ORDER BY ts DESC
-		LIMIT 5000
+		LIMIT 500000
 	`)
 	if err != nil {
 		http.Error(w, "Query error", 500)
